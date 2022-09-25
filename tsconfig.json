@@ -1,0 +1,7 @@
+{
+    "files": ["index.ts"], 
+    "extends": "@tsconfig/recommended/tsconfig.json",
+    "compilerOptions": {
+        "declaration": true,
+    }
+}
