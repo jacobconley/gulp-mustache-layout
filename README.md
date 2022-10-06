@@ -22,22 +22,18 @@ import { src, dest } from 'gulp'
 import GulpMustacheLayout from 'gulp-mustache-layout';
 
 import TOML from 'toml';
-import FS from 'fs'; 
 import Path from 'path'; 
 
-const TomlReader = (info: Path.ParsedPath) => { 
-    let path = Path.format( { ...info, base: '', ext: '.toml' } )
-    try { return TOML.parse(FS.readFileSync(path).toString()) }
-    catch(err) { 
-        let e = err as { code ?: string }
-        if(e.code == 'ENOENT') { console.debug("ENOENT " + path); return null  }
-        else throw err 
-    }
-}
 
-let layoutLoader = new GulpMustacheLayout()
+let layoutLoader = new GulpMustacheLayout({ 
+    varLoader: {
+        path: parsed => Path.format( { ...parsed, base: '', ext: '.toml' } ),
+        parser: TOML.parse,
+    } 
+})
+
 const layouts = { 
-    main: layoutLoader.load('src/layouts/main.mustache').readVars(TomlReader),
+    main: layoutLoader.load('src/layouts/main.mustache'),
 }
 
 

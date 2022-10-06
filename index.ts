@@ -17,16 +17,13 @@ const PLUGIN = 'gulp-mustache-layout'
 
 
 interface GlobalOptions { 
-    /**
-     * A function that dynamically provides variables to Mustache based on the input file.
-     * For example, this can be used to load variables from a configuration file for each template.
-     * 
-     * If `vars` is also provided, the return value of this function will be merged into it, 
-     * with the `vars`'s values overwriting this function's return value where applicable. 
-     * @param pathInfo The `ParsedPath` of the `.mustache` file for the template being rendered.
-     * @returns A "view" object with variable bindings passed to Mustache
-     */
-     varReader ?: (pathInfo : ParsedPath) => any
+
+    varLoader ?: { 
+        path:   (parsedPath: ParsedPath) => string, 
+        parser: (contents: string) => any, 
+    }
+
+    vars ?: any 
 }
 
 
@@ -35,8 +32,9 @@ interface RenderChainOptions extends GlobalOptions {
     /**
      * The name of the object containing this template's variables when accessed from within an inner template.  
      * Defaults to the file name of the `.mustache` template. 
+     * Set to `null` to disable inheritance altogether.
      */
-    scopeName ?: string
+    scopeName ?: string | null
 }
 
 interface RenderStreamOptions extends RenderChainOptions { 
@@ -55,48 +53,6 @@ interface RenderStreamOptions extends RenderChainOptions {
 }
 
 
-
-
-//
-// Implementation
-//
-
-
-
-
-
-
-
-/**
- * This is the highest-level instance of `gulp-mustache-layout`.
- * Use the constructor to create an instance, and then invoke its instance methods to get started. 
- */
-export default class GulpMustacheLayout { 
-    options : GlobalOptions
-
-    /**
-     * Creates a new top-level `gulp-mustache-layout` instance.
-     * @param options Global options that will be used as defaults for everything created by this instance.
-     * These options can be overrided further down the chain.  
-     */
-    constructor(options : GlobalOptions = {}) { 
-        this.options = options 
-    }
-
-    /**
-     * Loads a `.mustache` file as a Layout.
-     * 
-     * The returned object can then be chained into other nested Layouts using the `.wrap` method.
-     * After you have loaded all of your layouts, call `.done()` to create the stream object
-     * that is used in the Gulp pipeline. 
-     * @param path The file path of the outermost template
-     * @param options Options specific to this template rendering
-     * @returns An instance that can be chained to other Layouts or used to render the final template
-     */
-    load(path: string, options ?: RenderChainOptions) : RenderChain { 
-        return Template.Load(this, null, path, options ?? {})
-    }
-}
 
 export interface RenderChain { 
     /**
@@ -133,12 +89,54 @@ export interface RenderChain {
     done(options ?: RenderStreamOptions) : RenderStream
 
 
-    withVars(vars: any) : RenderChain
-
-    readVars(reader: (pathInfo : ParsedPath) => any) : RenderChain
-
+    /**
+     * Reloads the template
+     */
+    reload() : void 
 }
 
+
+
+//
+// Implementation
+//
+
+
+
+
+
+
+
+/**
+ * This is the highest-level instance of `gulp-mustache-layout`.
+ * Use the constructor to create an instance, and then invoke its instance methods to get started. 
+ */
+export default class GulpMustacheLayout { 
+    globalOptions : GlobalOptions
+
+    /**
+     * Creates a new top-level `gulp-mustache-layout` instance.
+     * @param options Global options that will be used as defaults for everything created by this instance.
+     * These options can be overridden further down the chain.  
+     */
+    constructor(options : GlobalOptions = {}) { 
+        this.globalOptions = options 
+    }
+
+    /**
+     * Loads a `.mustache` file as a Layout.
+     * 
+     * The returned object can then be chained into other nested Layouts using the `.wrap` method.
+     * After you have loaded all of your layouts, call `.done()` to create the stream object
+     * that is used in the Gulp pipeline. 
+     * @param path The file path of the outermost template
+     * @param options Options specific to this template rendering
+     * @returns An instance that can be chained to other Layouts or used to render the final template
+     */
+    load(path: string, options ?: RenderChainOptions) : RenderChain { 
+        return Template.Load(this, null, path, Object.assign({}, this.globalOptions, options ?? {}))
+    }
+}
 
 
 
@@ -151,26 +149,14 @@ interface TemplatePath {
 
 
 interface TemplateInitializer { 
-    /**
-     * The raw contents of the Mustache template
-     */
-    contents: string
 
     /**
      * The path information corresponding to the template 
-     * _if it was loaded from a file_,
-     * undefined if passed in as a literal
      */
     path : TemplatePath
 
-    /**
-     * The variable bindings specific to this template, 
-     * not including any inherited bindings from parent template.  
-     * 
-     * This is always initialized from a new object, 
-     * separate from any options passed into the plugin 
-     */
-    vars : any
+    templateContents : string 
+    loadedVars ?: any 
 
     /**
      * The plugin instance that created this instance
@@ -182,18 +168,20 @@ interface TemplateInitializer {
      */
     parent : Template | null
 
-    options : RenderChainOptions
+    effectiveOptions : RenderChainOptions
 }
+
 
 class Template implements RenderChain, TemplateInitializer {  
 
-    contents: string
-    path: TemplatePath
-    vars: any
+    path : TemplatePath
+
     plugin: GulpMustacheLayout
     parent: Template | null
-    options : RenderChainOptions
+    effectiveOptions : RenderChainOptions
 
+    templateContents : string 
+    loadedVars ?: any 
 
     //
     // Initializers
@@ -205,38 +193,32 @@ class Template implements RenderChain, TemplateInitializer {
      */
     constructor(x: TemplateInitializer) { 
         this.plugin   = x.plugin 
-        this.contents = x.contents 
         this.path     = x.path 
-        this.vars     = x.vars 
         this.parent   = x.parent 
-        this.options  = x.options
+        this.effectiveOptions  = x.effectiveOptions
+
+        this.templateContents   = x.templateContents
+        this.loadedVars         = x.loadedVars
     }
 
     /**
      * Loads a Mustache file from the specified path 
      * @param path The file path on the operating system
-     * @param options User-defined options for the loading of this template
+     * @param effectiveOptions User-defined options for the loading of this template
      * @param parent The template which "wraps" or yields to this new template
      * @returns A new `Template` instance
      */
-    static Load(plugin : GulpMustacheLayout, parent : Template | null, path : string, options: RenderChainOptions) : Template { 
-        console.debug("Loading " + path) 
+    static Load(plugin : GulpMustacheLayout, parent : Template | null, path : string, effectiveOptions: RenderChainOptions) : Template { 
 
         let pathInfo = Path.parse(path) 
-
-    
-        let contents; 
-        try { 
-            contents = FS.readFileSync(path).toString()
-        }
-        catch(err) { 
-            throw new PluginError(PLUGIN, `Reading file ${path}: ${err}`)
-        }
+        let pathObj : TemplatePath = { full: path, info: pathInfo }
 
         return new Template({ 
-            plugin, contents, parent, options,
-            vars: {}, 
-            path: { full: path, info: pathInfo },
+            plugin, parent, effectiveOptions,
+            path: pathObj,
+
+            templateContents:   Template.LoadContents(pathObj),
+            loadedVars:         Template.LoadVars(pathObj, effectiveOptions), 
         })
     }
 
@@ -244,67 +226,94 @@ class Template implements RenderChain, TemplateInitializer {
      * Instantiates a `Template` from a Vinyl object 
      * @param vinyl The file object piped into this plugin
      * @param pathInfo The object returned by `Path.parse` - provided separately since this is re-used by the stream object
-     * @param options User-defined options for the loading of this template
+     * @param effectiveOptions User-defined options for the loading of this template
      * @param parent The template which "wraps" or yields to this new template
      * @returns A new `Template` instance
      */
-    static FromVinyl(plugin : GulpMustacheLayout, parent : Template | null, vinyl : Vinyl, pathInfo: ParsedPath, options : RenderChainOptions) : Template { 
-        console.debug("Loading from vinyl at " + vinyl.path)
+    static FromVinyl(plugin : GulpMustacheLayout, parent : Template | null, vinyl : Vinyl, pathInfo: ParsedPath, effectiveOptions : RenderChainOptions) : Template { 
 
         let inputContents = vinyl.contents?.toString()
         if(! inputContents) throw new PluginError(PLUGIN, "Undefined contents of file")
 
+        let pathObj = { full: vinyl.path, info: pathInfo } 
+
         return new Template({
-            plugin, parent, options, 
-            contents: inputContents.toString(),
-            vars: {}, 
-            path: { full: vinyl.path, info: pathInfo }
+            plugin, parent, effectiveOptions, 
+            path: pathObj, 
+
+            templateContents:   inputContents, 
+            loadedVars:         Template.LoadVars(pathObj, effectiveOptions), 
         })
 
     }
 
+    //
+    // Static helpers
+    //
 
 
-
-
-
-    readVars(reader: (pathInfo: Path.ParsedPath) => any): RenderChain {
-        if(! this.path) { 
-            throw new PluginError(PLUGIN, "Cannot readVars on a template literal - no path to read from!")
-        }
+    static LoadContents(path: TemplatePath) : string { 
         try { 
-            let loaded = reader(this.path.info)
-            console.debug("varReader", loaded)
-            Object.assign(this.vars, loaded)
-            return this.withVars(loaded)
+            return FS.readFileSync(path.full).toString()
         }
         catch(err) { 
-            throw new PluginError(PLUGIN, "While executing varReader:" + err, { showStack: true })
+            throw new PluginError(PLUGIN, `Reading file ${path.full}: ${err}`)
         }
+
     }
 
-    withVars(newVars: any): RenderChain {
-        return new Template(
-            Object.assign({}, this, { 
-                vars: Object.assign({}, this.vars, newVars)
-            })
-        )
+    static LoadVars(path: TemplatePath, options: RenderChainOptions) : any { 
+
+        let varReader = options.varLoader 
+        if(varReader) { 
+            let varPathResult = varReader.path(path.info)
+            let varPath : string = varPathResult
+
+            let varContents 
+            try { 
+                varContents = FS.readFileSync( varPath ).toString() 
+            }
+            catch(err){ 
+                let e = err as { code ?: string }
+                if(e.code == 'ENOENT') { 
+                    console.debug("Template file not found, skipping: " + varPath)
+                    return {}
+                }
+                else throw new PluginError(PLUGIN, `Reading var file ${varPath}: ${e}`)
+            }
+
+            try { 
+                let x = varReader.parser(varContents) 
+                return x 
+            }
+            catch(err) { 
+                throw new PluginError(PLUGIN, `While executing varReader on ${varPath}: ${err}`, { showStack: true })
+            }
+        }
+        else return {} 
     }
+
 
     //
     // Instance methods
     //
 
+    mergedVars() : any { 
+        return Object.assign({}, this.loadedVars, this.effectiveOptions.vars) 
+    }
 
     /**
      * Joins the `vars` object specific to this template with inherited variables from parent templates 
      * @returns A newly-initialized view object passed on to Mustache
      */
     effectiveVars() : any { 
-        let res : any = {}
+        let res = this.mergedVars()
+
+        // Inherits parent templates via their scopes 
         for(let p = this.parent; p; p = p.parent) { 
-            if(p.options.scopeName) res[p.options.scopeName] = p.vars
+            if(p.effectiveOptions.scopeName !== null) res[p.effectiveOptions.scopeName ?? p.path.info.name] = p.mergedVars()
         }
+
         return res 
     }
 
@@ -332,7 +341,7 @@ class Template implements RenderChain, TemplateInitializer {
         }
 
         try { 
-            return Mustache.render(this.contents, this.effectiveVars(), loadPartial)
+            return Mustache.render(this.templateContents, this.effectiveVars(), loadPartial)
         }
         catch(err) { 
             if(err instanceof PluginError) throw err
@@ -347,16 +356,21 @@ class Template implements RenderChain, TemplateInitializer {
     //
 
 
-    wrap({ contents, path, vars, options }: Template): RenderChain {
+    wrap({ path, templateContents, loadedVars, effectiveOptions }: Template): RenderChain {
         return new Template({ 
-            contents, path, vars, options, 
+            path, templateContents, loadedVars, effectiveOptions, 
             plugin: this.plugin, 
             parent: this, 
         })
     }
 
     done(options?: RenderStreamOptions | undefined): RenderStream {
-        return new RenderStream(this, Object.assign({}, this.plugin.options, options ?? {}))
+        return new RenderStream(this, Object.assign({}, this.plugin.globalOptions, options ?? {}))
+    }
+
+    reload(): void {
+        this.templateContents   = Template.LoadContents(this.path) 
+        this.loadedVars         = Template.LoadVars(this.path, this.effectiveOptions)
     }
 }
 
@@ -389,6 +403,8 @@ class RenderStream extends Stream.Transform {
 
         // Ignore partials, so that globs don't render them independently
         if(file.basename.startsWith("_")) return callback()
+        // Ignore non-mustache files, so that var files don't get processed
+        if(file.extname != '.mustache') return callback() 
 
         try { 
             let pathInfo = Path.parse(file.path)
