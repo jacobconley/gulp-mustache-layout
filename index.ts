@@ -9,33 +9,36 @@ import Mustache from 'mustache';
 
 const PLUGIN = 'gulp-mustache-layout'
 
+/**
+ * Any POJO will satisfy this interface. 
+ * This is a dummy interface to basically allow TypeScript to work with `any` types, 
+ * but prevent them from being `null` or `undefined` in certain cases.  
+ */
+interface Objekt { [key: string]: any }
+
 
 //
 // Options
 //
 
 
+interface VarLoader { 
+    path:   (parsedPath: ParsedPath) => string, 
+    parser: (contents: string) => any, 
+}
+
 
 interface GlobalOptions { 
 
-    varLoader ?: { 
-        path:   (parsedPath: ParsedPath) => string, 
-        parser: (contents: string) => any, 
-    }
+    varLoader ?: VarLoader
 
-    vars ?: any 
+    vars ?: Objekt  
 }
 
 
-interface RenderChainOptions extends GlobalOptions { 
-
-    /**
-     * The name of the object containing this template's variables when accessed from within an inner template.  
-     * Defaults to the file name of the `.mustache` template. 
-     * Set to `null` to disable inheritance altogether.
-     */
-    scopeName ?: string | null
-}
+// Later: Expand this to include `scopeName` 
+// https://github.com/jacobconley/gulp-mustache-layout/issues/1
+type RenderChainOptions = GlobalOptions
 
 interface RenderStreamOptions extends RenderChainOptions { 
     /**
@@ -150,13 +153,42 @@ interface TemplatePath {
 
 interface TemplateInitializer { 
 
+    //
+    // Configuration
+    //
+
     /**
      * The path information corresponding to the template 
      */
     path : TemplatePath
 
+    /**
+     * The variable loader passed in the options 
+     */
+    varLoader ?: VarLoader
+
+    //
+    // Loaded data
+    //
+
+    /**
+     * The loaded contents of the template
+     */
     templateContents : string 
-    loadedVars ?: any 
+
+    /**
+     * The variables passed in the options 
+     */
+    declaredVars : Objekt 
+
+    /**
+     * The variables loaded through `varReader` 
+     */
+    loadedVars : Objekt 
+
+    //
+    // Runtime context
+    //
 
     /**
      * The plugin instance that created this instance
@@ -168,20 +200,20 @@ interface TemplateInitializer {
      */
     parent : Template | null
 
-    effectiveOptions : RenderChainOptions
 }
 
 
 class Template implements RenderChain, TemplateInitializer {  
 
     path : TemplatePath
+    varLoader ?: VarLoader
 
     plugin: GulpMustacheLayout
     parent: Template | null
-    effectiveOptions : RenderChainOptions
 
     templateContents : string 
-    loadedVars ?: any 
+    declaredVars    : Objekt 
+    loadedVars      : Objekt 
 
     //
     // Initializers
@@ -193,12 +225,14 @@ class Template implements RenderChain, TemplateInitializer {
      */
     constructor(x: TemplateInitializer) { 
         this.plugin   = x.plugin 
-        this.path     = x.path 
         this.parent   = x.parent 
-        this.effectiveOptions  = x.effectiveOptions
+
+        this.path       = x.path 
+        this.varLoader  = x.varLoader
 
         this.templateContents   = x.templateContents
         this.loadedVars         = x.loadedVars
+        this.declaredVars       = x.declaredVars
     }
 
     /**
@@ -214,11 +248,14 @@ class Template implements RenderChain, TemplateInitializer {
         let pathObj : TemplatePath = { full: path, info: pathInfo }
 
         return new Template({ 
-            plugin, parent, effectiveOptions,
+            plugin, parent,
             path: pathObj,
 
             templateContents:   Template.LoadContents(pathObj),
-            loadedVars:         Template.LoadVars(pathObj, effectiveOptions), 
+            loadedVars:         effectiveOptions.varLoader && Template.LoadVars(pathObj, effectiveOptions.varLoader), 
+
+            declaredVars:       effectiveOptions.vars ?? {}, 
+            varLoader:          effectiveOptions.varLoader,
         })
     }
 
@@ -238,11 +275,14 @@ class Template implements RenderChain, TemplateInitializer {
         let pathObj = { full: vinyl.path, info: pathInfo } 
 
         return new Template({
-            plugin, parent, effectiveOptions, 
+            plugin, parent, 
             path: pathObj, 
 
             templateContents:   inputContents, 
-            loadedVars:         Template.LoadVars(pathObj, effectiveOptions), 
+            loadedVars:         effectiveOptions.varLoader && Template.LoadVars(pathObj, effectiveOptions.varLoader), 
+
+            declaredVars:       effectiveOptions.vars ?? {}, 
+            varLoader:          effectiveOptions.varLoader,
         })
 
     }
@@ -252,6 +292,11 @@ class Template implements RenderChain, TemplateInitializer {
     //
 
 
+    /**
+     * Loads the contents of the template. 
+     * @param path The `TemplatePath` info object
+     * @returns The loaded contents
+     */
     static LoadContents(path: TemplatePath) : string { 
         try { 
             return FS.readFileSync(path.full).toString()
@@ -262,9 +307,8 @@ class Template implements RenderChain, TemplateInitializer {
 
     }
 
-    static LoadVars(path: TemplatePath, options: RenderChainOptions) : any { 
+    static LoadVars(path: TemplatePath, varReader: VarLoader) : any { 
 
-        let varReader = options.varLoader 
         if(varReader) { 
             let varPathResult = varReader.path(path.info)
             let varPath : string = varPathResult
@@ -298,23 +342,16 @@ class Template implements RenderChain, TemplateInitializer {
     // Instance methods
     //
 
+    /**
+     * 
+     * @returns A new object containing the loaded and declared vars merged
+     */
     mergedVars() : any { 
-        return Object.assign({}, this.loadedVars, this.effectiveOptions.vars) 
+        return Object.assign({}, this.loadedVars, this.declaredVars) 
     }
 
-    /**
-     * Joins the `vars` object specific to this template with inherited variables from parent templates 
-     * @returns A newly-initialized view object passed on to Mustache
-     */
-    effectiveVars() : any { 
-        let res = this.mergedVars()
-
-        // Inherits parent templates via their scopes 
-        for(let p = this.parent; p; p = p.parent) { 
-            if(p.effectiveOptions.scopeName !== null) res[p.effectiveOptions.scopeName ?? p.path.info.name] = p.mergedVars()
-        }
-
-        return res 
+    globalVars() : any { 
+        return Object.assign({}, this.loadedVars['global'], this.declaredVars['global']) 
     }
 
     /**
@@ -322,9 +359,22 @@ class Template implements RenderChain, TemplateInitializer {
      * 
      * Throws an error if `yield` is invoked without `yieldContents`
      * @param yieldContents The contents to render for the `yield` placeholder, if any
+     * @param globalVars Vars inherited from the bottom-level scope
      * @returns The render result, as a `string`
      */
-    renderStep(yieldContents : string | null) : string { 
+    renderStep(yieldContents : string | null, globalVars: any) : string { 
+
+        let effectiveVars = this.mergedVars() 
+
+        effectiveVars.global = globalVars
+
+        // Inherits parent templates via their scopes 
+        for(let p = this.parent; p; p = p.parent) { 
+            effectiveVars[p.path.info.name] = p.mergedVars()
+        }
+
+
+        // Actual rendering
 
         const loadPartial = (name: string) => { 
             if(name == 'yield') { 
@@ -341,7 +391,7 @@ class Template implements RenderChain, TemplateInitializer {
         }
 
         try { 
-            return Mustache.render(this.templateContents, this.effectiveVars(), loadPartial)
+            return Mustache.render(this.templateContents, effectiveVars, loadPartial)
         }
         catch(err) { 
             if(err instanceof PluginError) throw err
@@ -356,9 +406,9 @@ class Template implements RenderChain, TemplateInitializer {
     //
 
 
-    wrap({ path, templateContents, loadedVars, effectiveOptions }: Template): RenderChain {
+    wrap({ path, templateContents, loadedVars, declaredVars }: Template): RenderChain {
         return new Template({ 
-            path, templateContents, loadedVars, effectiveOptions, 
+            path, templateContents, loadedVars, declaredVars, 
             plugin: this.plugin, 
             parent: this, 
         })
@@ -369,8 +419,8 @@ class Template implements RenderChain, TemplateInitializer {
     }
 
     reload(): void {
-        this.templateContents   = Template.LoadContents(this.path) 
-        this.loadedVars         = Template.LoadVars(this.path, this.effectiveOptions)
+        this.templateContents = Template.LoadContents(this.path) 
+        if(this.varLoader) this.loadedVars = Template.LoadVars(this.path, this.varLoader)
     }
 }
 
@@ -409,9 +459,10 @@ class RenderStream extends Stream.Transform {
         try { 
             let pathInfo = Path.parse(file.path)
             let template = Template.FromVinyl(this.parent.plugin, this.parent, file, pathInfo, this.options) 
+            let globalVars = template.globalVars()
 
-            let output = template.renderStep(null)
-            for(let t : Template | null = this.parent; t; t = t.parent) output = t.renderStep(output) 
+            let output = template.renderStep(null, globalVars)
+            for(let t : Template | null = this.parent; t; t = t.parent) output = t.renderStep(output, globalVars) 
 
 
             file.contents = Buffer.from(output) 

@@ -50,3 +50,10 @@ export function html() {
  - Render nested mustache templates, as simply yet flexibly as possible
   - We do everything else, which lets it be more configurable than SSGs I've seen
  - Adhere to the Gulp plugin guidelines, which help to enforce modularity
+
+
+ # Differences from normal Mustache
+ - The special `yield` partial, which renders the child template.  
+   Unlike normal partials, this inherits variables from the parent template **within a scope**, 
+   which defaults to the file name of the parent template (without an extension)
+ - The special `global` variable, which is bound in every template 
