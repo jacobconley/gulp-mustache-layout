@@ -270,7 +270,7 @@ class Template implements RenderChain, TemplateInitializer {
     static FromVinyl(plugin : GulpMustacheLayout, parent : Template | null, vinyl : Vinyl, pathInfo: ParsedPath, effectiveOptions : RenderChainOptions) : Template { 
 
         let inputContents = vinyl.contents?.toString()
-        if(! inputContents) throw new PluginError(PLUGIN, "Undefined contents of file")
+        if(inputContents === undefined) throw new PluginError(PLUGIN, "Undefined contents of file")
 
         let pathObj = { full: vinyl.path, info: pathInfo } 
 
@@ -375,8 +375,10 @@ class Template implements RenderChain, TemplateInitializer {
 
         const loadPartial = (name: string) => { 
             if(name == 'yield') { 
-                if(yieldContents) return yieldContents
-                else throw new PluginError(PLUGIN, `No contents to yield in ${this.path?.full ?? 'template literal'}`)
+                if(yieldContents === null) {
+                    throw new PluginError(PLUGIN, `No contents to yield in ${this.path?.full ?? 'template literal'}`)
+                }
+                else return yieldContents
             }
 
             try { 
