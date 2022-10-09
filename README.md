@@ -56,4 +56,6 @@ export function html() {
  - The special `yield` partial, which renders the child template.  
    Unlike normal partials, this inherits variables from the parent template **within a scope**, 
    which defaults to the file name of the parent template (without an extension)
- - The special `global` variable, which is bound in every template 
+ - Partials which explicitly start with a `./` are loaded relative to the file of the template containing them.
+   Partials which do not, but are still a relative path, are loaded relative to the current working directory. 
+ - The special `global` variable is bound in every template 

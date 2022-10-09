@@ -319,10 +319,7 @@ class Template implements RenderChain, TemplateInitializer {
             }
             catch(err){ 
                 let e = err as { code ?: string }
-                if(e.code == 'ENOENT') { 
-                    console.debug("Template file not found, skipping: " + varPath)
-                    return {}
-                }
+                if(e.code == 'ENOENT') return {}
                 else throw new PluginError(PLUGIN, `Reading var file ${varPath}: ${e}`)
             }
 
@@ -382,12 +379,14 @@ class Template implements RenderChain, TemplateInitializer {
                 else throw new PluginError(PLUGIN, `No contents to yield in ${this.path?.full ?? 'template literal'}`)
             }
 
-            else if(this.path) { 
-                const path = Path.resolve(this.path.info.dir, name + '.mustache')
+            try { 
+                let path = name + '.mustache' 
+                if(name.startsWith("./")) path = Path.resolve(this.path.info.dir, path)
                 return FS.readFileSync(path).toString() 
             }
-
-            else throw new PluginError(PLUGIN, "Cannot render partial - no directory name (is this a template literal?)")
+            catch(err) { 
+                throw new PluginError(PLUGIN, `While rendering partial '${name}': ${err}`)
+            }
         }
 
         try { 
