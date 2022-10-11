@@ -84,6 +84,11 @@ export interface RenderChain {
     wrap(child : RenderChain) : RenderChain 
 
     /**
+     * Returns a copy of this object, but with the provided options set. 
+     */
+    withOptions(options : RenderChainOptions) : RenderChain
+
+    /**
      * Finishes the template chain.  
      * The object returned by this can be passed as an argument to Gulp's `.pipe` method.
      * @param options Options specific to the rendering of innermost template file - 
@@ -165,7 +170,7 @@ interface TemplateInitializer {
     /**
      * The variable loader passed in the options 
      */
-    varLoader ?: VarLoader
+    varLoader : VarLoader | null 
 
     //
     // Loaded data
@@ -206,7 +211,7 @@ interface TemplateInitializer {
 class Template implements RenderChain, TemplateInitializer {  
 
     path : TemplatePath
-    varLoader ?: VarLoader
+    varLoader : VarLoader | null 
 
     plugin: GulpMustacheLayout
     parent: Template | null
@@ -255,7 +260,7 @@ class Template implements RenderChain, TemplateInitializer {
             loadedVars:         effectiveOptions.varLoader && Template.LoadVars(pathObj, effectiveOptions.varLoader), 
 
             declaredVars:       effectiveOptions.vars ?? {}, 
-            varLoader:          effectiveOptions.varLoader,
+            varLoader:          effectiveOptions.varLoader ?? null,
         })
     }
 
@@ -282,7 +287,7 @@ class Template implements RenderChain, TemplateInitializer {
             loadedVars:         effectiveOptions.varLoader && Template.LoadVars(pathObj, effectiveOptions.varLoader), 
 
             declaredVars:       effectiveOptions.vars ?? {}, 
-            varLoader:          effectiveOptions.varLoader,
+            varLoader:          effectiveOptions.varLoader ?? null,
         })
 
     }
@@ -348,7 +353,7 @@ class Template implements RenderChain, TemplateInitializer {
     }
 
     globalVars() : any { 
-        return Object.assign({}, this.loadedVars['global'], this.declaredVars['global']) 
+        return Object.assign({}, (this.loadedVars ?? {})['global'], (this.declaredVars ?? {})['global']) 
     }
 
     /**
@@ -407,9 +412,9 @@ class Template implements RenderChain, TemplateInitializer {
     //
 
 
-    wrap({ path, templateContents, loadedVars, declaredVars }: Template): RenderChain {
+    wrap({ path, templateContents, loadedVars, declaredVars, varLoader }: Template): RenderChain {
         return new Template({ 
-            path, templateContents, loadedVars, declaredVars, 
+            path, templateContents, loadedVars, declaredVars, varLoader,
             plugin: this.plugin, 
             parent: this, 
         })
@@ -422,6 +427,16 @@ class Template implements RenderChain, TemplateInitializer {
     reload(): void {
         this.templateContents = Template.LoadContents(this.path) 
         if(this.varLoader) this.loadedVars = Template.LoadVars(this.path, this.varLoader)
+    }
+
+    withOptions(options: RenderChainOptions): RenderChain {
+        let { path, templateContents, plugin, parent } = this 
+        return new Template({ 
+            path, templateContents, plugin, parent, 
+            varLoader:      options.varLoader ?? null, 
+            declaredVars:   options.vars ?? {}, 
+            loadedVars:     options.varLoader && Template.LoadVars(path, options.varLoader),
+        })
     }
 }
 
